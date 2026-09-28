@@ -1,0 +1,17 @@
+# CMake build directories
+/build/
+/cmake-build-*/
+/out/build/
+
+# In-source CMake artifacts
+/CMakeCache.txt
+/CMakeFiles/
+/Testing/
+/cmake_install.cmake
+/CTestTestfile.cmake
+
+# Visual Studio local state
+/.vs/
+/CMakeUserPresets.json
+*.user
+*.suo
