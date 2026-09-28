@@ -14,7 +14,7 @@ On Visual Studio multi-configuration generators the executables are in `build/Re
 
 ## Input and CLI
 
-A board file has exactly 9 lines of exactly 7 symbols; line 1 is the top. `P` = pink, `B` = blue, `G` = green, `O` = orange. No spaces or empty cells in the input. `examples/initial-board.txt` is an independently generated example, not a transcription of the reference puzzle. The original screenshots and task prompt are excluded by `.gitignore`.
+A board file has exactly 9 lines of exactly 7 symbols; line 1 is the top. `P` = pink, `B` = blue, `G` = green, `O` = orange. No spaces or empty cells in the input. See `examples/initial-board.txt` for a generated example.
 
 ```sh
 solver examples/initial-board.txt
