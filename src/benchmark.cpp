@@ -22,10 +22,14 @@
 namespace {
 
 void print_usage(std::ostream& output) {
-    output << "Usage: solver-bench --random N --seed S [--fast | --time-limit-ms M]\n"
+    output << "Usage: solver-bench --random N --seed S [--fast | --time-limit-ms M] "
+              "[--canonical-tt] [--distinct-color-lb] [--unordered-tt]\n"
            << "  N: positive number of independent random boards\n"
            << "  S: unsigned 64-bit decimal seed (zero is allowed)\n"
            << "  --fast: measure complete heuristic search without exact proof\n"
+           << "  --canonical-tt: exact visible-board transposition keys\n"
+           << "  --distinct-color-lb: compare legacy distinct-color bound\n"
+           << "  --unordered-tt: compare legacy unordered_map failure table\n"
            << "  M: per-board exact-search limit in milliseconds (default 1000; 0 means unlimited)\n";
 }
 
@@ -75,12 +79,30 @@ int main(int argc, char* argv[]) {
         std::uint64_t limit_ms = 1000;
         bool limit_set = false;
         bool fast = false;
+        bool canonical_tt = false;
+        bool column_run_bound = true;
+        bool flat_table = true;
 
         for (int index = 1; index < argc;) {
             const std::string_view option(argv[index++]);
             if (option == "--fast") {
                 if (fast) throw std::invalid_argument("--fast specified more than once");
                 fast = true;
+                continue;
+            }
+            if (option == "--canonical-tt") {
+                if (canonical_tt) throw std::invalid_argument("--canonical-tt specified more than once");
+                canonical_tt = true;
+                continue;
+            }
+            if (option == "--distinct-color-lb") {
+                if (!column_run_bound) throw std::invalid_argument("--distinct-color-lb specified more than once");
+                column_run_bound = false;
+                continue;
+            }
+            if (option == "--unordered-tt") {
+                if (!flat_table) throw std::invalid_argument("--unordered-tt specified more than once");
+                flat_table = false;
                 continue;
             }
             if (option != "--random" && option != "--seed" && option != "--time-limit-ms") {
@@ -106,8 +128,8 @@ int main(int argc, char* argv[]) {
                 limit_ms = value;
             }
         }
-        if (fast && limit_set) {
-            throw std::invalid_argument("--fast and --time-limit-ms cannot be combined");
+        if (fast && (limit_set || canonical_tt || !column_run_bound || !flat_table)) {
+            throw std::invalid_argument("--fast cannot use exact-search options");
         }
 
         if (!requested_count || !seed) {
@@ -142,6 +164,9 @@ int main(int argc, char* argv[]) {
 
         std::cout << "boards=" << count << " seed=" << *seed
                   << " mode=" << (fast ? "fast" : "exact")
+                  << " tt_key=" << (canonical_tt ? "canonical" : "raw")
+                  << " lower_bound=" << (column_run_bound ? "column-runs" : "colors")
+                  << " table=" << (flat_table ? "flat" : "unordered_map")
                   << " time_limit_ms=" << (fast ? 0 : limit_ms) << " (0=unlimited)\n"
                   << "generator=mt19937_64, two low bits per tile in row-major order; "
                      "colors=PBGO\n"
@@ -159,7 +184,8 @@ int main(int argc, char* argv[]) {
                 }
             }
             const tiles::Game game(rows);
-            const auto solution = tiles::Solver(game).solve(
+            const auto solution = tiles::Solver(game, tiles::SearchOptions{
+                canonical_tt, column_run_bound, flat_table}).solve(
                 !fast, fast ? std::chrono::milliseconds{0} : time_limit);
             const double time_ms = solution.elapsed_seconds * 1000.0;
             times_ms.push_back(time_ms);

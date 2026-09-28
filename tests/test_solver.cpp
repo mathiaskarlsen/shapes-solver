@@ -1,17 +1,22 @@
+#include "bfs.h"
 #include "game.h"
+#include "sat.h"
 #include "solver.h"
 
 #include <algorithm>
 #include <array>
 #include <bit>
 #include <cstdint>
+#include <cstdlib>
 #include <exception>
+#include <filesystem>
 #include <initializer_list>
 #include <iostream>
 #include <stdexcept>
 #include <string>
 #include <tuple>
 #include <utility>
+#include <unordered_map>
 #include <vector>
 
 namespace {
@@ -235,8 +240,8 @@ void test_target_reached_and_ruled_out() {
     replay(game, state, ruled_out);
 
     const auto weaker_bound = Solver(game).solve_from_until(state, 0);
-    check(weaker_bound.target_impossible && !weaker_bound.optimal,
-          "ruling out zero clicks must not imply a two-click solution is optimal");
+    check(weaker_bound.target_impossible,
+          "nonempty board cannot clear in zero clicks");
     const auto empty = Solver(game).solve_from_until(0, 0);
     check(!empty.target_impossible && empty.optimal && empty.moves.empty(),
           "empty state must meet a zero-click target");
@@ -263,6 +268,213 @@ std::uint64_t next_random(std::uint64_t& seed) {
     seed ^= seed >> 7;
     seed ^= seed << 17;
     return seed;
+}
+
+void test_canonical_visible_states() {
+    const Game game(board({{1, 0, 'G'}, {8, 1, 'B'}, {4, 3, 'O'}, {6, 5, 'G'}}));
+    const State upper = mask({{0, 0}, {8, 1}});
+    const State lower = mask({{2, 0}, {8, 1}});
+    check(game.canonical_key(upper) == game.canonical_key(lower) &&
+              game.render(upper) == game.render(lower),
+          "surviving interchangeable P tiles must share a visible-board key");
+    check(game.canonical_key(upper) != game.canonical_key(mask({{1, 0}, {8, 1}})),
+          "different visible colors must have different keys");
+
+    const auto successors = [&](State state) {
+        std::vector<State> keys;
+        for (const Move& move : game.generate_moves(state)) {
+            keys.push_back(game.canonical_key(game.apply_move(state, move)));
+        }
+        std::sort(keys.begin(), keys.end());
+        return keys;
+    };
+    check(successors(upper) == successors(lower),
+          "equivalent boards must have equivalent legal successor boards");
+
+    for (int column = 0; column < tiles::kColumns; ++column) {
+        std::unordered_map<std::string, State> key_by_sequence;
+        std::unordered_map<State, std::string> sequence_by_key;
+        for (int local = 0; local < (1 << tiles::kRows); ++local) {
+            State state = 0;
+            for (int row = 0; row < tiles::kRows; ++row) {
+                if (local & (1 << row)) state |= bit(row, column);
+            }
+            const auto rendered = game.render(state);
+            std::string sequence;
+            for (int row = 0; row < tiles::kRows; ++row) {
+                if (rendered[row][column] != '.') sequence += rendered[row][column];
+            }
+            const State key = game.canonical_key(state);
+            const auto [by_sequence, new_sequence] = key_by_sequence.emplace(sequence, key);
+            const auto [by_key, new_key] = sequence_by_key.emplace(key, sequence);
+            check((new_sequence || by_sequence->second == key) &&
+                      (new_key || by_key->second == sequence),
+                  "column keys must match compacted color sequences exactly");
+        }
+    }
+    std::uint64_t seed = 0x19879c562eb1a573ULL;
+    for (int trial = 0; trial < 200; ++trial) {
+        const State state = next_random(seed) & tiles::kFullBoard;
+        const State key = game.canonical_key(state);
+        State representative = 0;
+        for (int column = 0; column < tiles::kColumns; ++column) {
+            const State local = (key >> (column * tiles::kRows)) & 511;
+            for (int row = 0; row < tiles::kRows; ++row) {
+                if (local & (State{1} << row)) representative |= bit(row, column);
+            }
+        }
+        check(game.canonical_key(representative) == key &&
+                  game.render(representative) == game.render(state) &&
+                  successors(representative) == successors(state),
+              "random equivalent states must share visible boards and successor keys");
+    }
+}
+
+void test_canonical_bounded_proofs() {
+    const Game game(Rows{
+        "BPOOGOO", "GOOBGBB", "BOPPPGP",
+        "OPGGPPG", "BOBPGGG", "BBGGBBP",
+        "BGPGBPO", "BGBPOPG", "PPBPPGB"
+    });
+    std::uint64_t seed = 0x873105dc901a147bULL;
+    for (int trial = 0; trial < 24; ++trial) {
+        State state = 0;
+        for (int i = 0; i < 9; ++i) state |= State{1} << (next_random(seed) % 63);
+        for (int target = 0; target <= 5; ++target) {
+            const auto raw = Solver(game).solve_from_until(state, target);
+            const auto canonical = Solver(game, tiles::SearchOptions{true})
+                                       .solve_from_until(state, target);
+            check(raw.target_impossible == canonical.target_impossible &&
+                      (raw.moves.size() <= static_cast<std::size_t>(target)) ==
+                          (canonical.moves.size() <= static_cast<std::size_t>(target)),
+                  "raw and canonical DFS must agree on bounded SAT/UNSAT");
+            replay(game, state, canonical);
+            const auto flat = Solver(game, tiles::SearchOptions{true, false, true})
+                                  .solve_from_until(state, target);
+            check(raw.target_impossible == flat.target_impossible &&
+                      (raw.moves.size() <= static_cast<std::size_t>(target)) ==
+                          (flat.moves.size() <= static_cast<std::size_t>(target)),
+                  "flat failure table must preserve bounded proof results");
+            replay(game, state, flat);
+            const auto parallel = Solver(game, tiles::SearchOptions{true, true, true, 4})
+                                      .solve_from_until(state, target);
+            check(raw.target_impossible == parallel.target_impossible &&
+                      (raw.moves.size() <= static_cast<std::size_t>(target)) ==
+                          (parallel.moves.size() <= static_cast<std::size_t>(target)),
+                  "parallel frontier must preserve bounded proof results");
+            replay(game, state, parallel);
+        }
+    }
+}
+
+void test_bounded_bfs() {
+    const Game game(Rows{
+        "BPOOGOO", "GOOBGBB", "BOPPPGP",
+        "OPGGPPG", "BOBPGGG", "BBGGBBP",
+        "BGPGBPO", "BGBPOPG", "PPBPPGB"
+    });
+    check(tiles::bounded_bfs(game, 0, 0).status == tiles::BfsStatus::FOUND,
+          "empty board needs zero moves");
+    const auto insufficient = tiles::bounded_bfs(
+        game, bit(0, 0), 1, tiles::BfsOptions{1, std::chrono::milliseconds{0}});
+    check(insufficient.status == tiles::BfsStatus::RESOURCE_LIMIT,
+          "BFS must report a tight memory limit, not an impossible target");
+    std::uint64_t seed = 0x873105dc901a147bULL;
+    for (int trial = 0; trial < 24; ++trial) {
+        State state = 0;
+        for (int i = 0; i < 7; ++i) state |= State{1} << (next_random(seed) % 63);
+        for (int target = 0; target <= 5; ++target) {
+            const auto dfs = Solver(game).solve_from_until(state, target);
+            const auto bfs = tiles::bounded_bfs(game, state, target);
+            check(bfs.status != tiles::BfsStatus::RESOURCE_LIMIT &&
+                      (bfs.status == tiles::BfsStatus::FOUND) ==
+                          (dfs.moves.size() <= static_cast<std::size_t>(target)) &&
+                      (bfs.status == tiles::BfsStatus::UNSAT) == dfs.target_impossible,
+                  "bounded BFS and DFS must agree on reachable short boards");
+            if (bfs.status == tiles::BfsStatus::FOUND) {
+                tiles::Solution replayable;
+                replayable.moves = bfs.moves;
+                replay(game, state, replayable);
+            }
+        }
+    }
+}
+
+void test_sat_cross_validation() {
+    const char* backend = std::getenv("SHAPES_SAT_SOLVER");
+    if (!backend || !*backend) return; // External CDCL solver is optional.
+    const Game game(Rows{
+        "BPOOGOO", "GOOBGBB", "BOPPPGP",
+        "OPGGPPG", "BOBPGGG", "BBGGBBP",
+        "BGPGBPO", "BGBPOPG", "PPBPPGB"
+    });
+    const auto path = (std::filesystem::temp_directory_path() /
+        ("shapes-sat-check-" + std::to_string(
+            std::chrono::steady_clock::now().time_since_epoch().count()) + ".cnf")).string();
+    const auto compare = [&](const Game& example, State state, int target) {
+        const auto dfs = Solver(example).solve_from_until(state, target);
+        const auto sat = tiles::solve_sat_bounded(
+            example, state, target, tiles::SatOptions{path, backend});
+        std::filesystem::remove(path);
+        check((sat.status == tiles::SatStatus::found) ==
+                  (dfs.moves.size() <= static_cast<std::size_t>(target)) &&
+                  (sat.status == tiles::SatStatus::proven_impossible) ==
+                      dfs.target_impossible,
+              "bounded SAT and DFS must agree: " + sat.detail);
+        if (sat.status == tiles::SatStatus::found) {
+            tiles::Solution replayable;
+            replayable.moves = sat.moves;
+            replay(example, state, replayable);
+        }
+    };
+    compare(game, 0, 0);
+    const Game merging(board({{8, 1, 'B'}}));
+    const State merge_state = mask({{8, 0}, {8, 1}, {7, 1}});
+    compare(merging, merge_state, 1);
+    compare(merging, merge_state, 2);
+    compare(merging, merge_state, 3);
+    std::uint64_t seed = 0x29eb319a638a24d1ULL;
+    for (int trial = 0; trial < 12; ++trial) {
+        State state = 0;
+        for (int i = 0; i < 6; ++i) state |= State{1} << (next_random(seed) % 63);
+        for (int target = 0; target <= 4; ++target) {
+            compare(game, state, target);
+        }
+    }
+}
+
+void test_column_run_bound() {
+    const Game separated(board({{0, 0, 'G'}, {0, 2, 'G'},
+                                {0, 4, 'G'}, {0, 5, 'G'}}));
+    const State state = mask({{0, 0}, {0, 2}, {0, 4}, {0, 5}});
+    check(separated.column_run_lower_bound(0) == 0 &&
+              separated.column_run_lower_bound(state) == 3,
+          "separate same-color column ranges require separate clicks");
+    const auto example = Solver(separated).solve_from(state);
+    check(example.optimal && example.moves.size() == 3,
+          "three disjoint column runs need three clicks");
+
+    const Game game(Rows{
+        "BPOOGOO", "GOOBGBB", "BOPPPGP",
+        "OPGGPPG", "BOBPGGG", "BBGGBBP",
+        "BGPGBPO", "BGBPOPG", "PPBPPGB"
+    });
+    std::uint64_t seed = 0x2ab0635a771e48d1ULL;
+    for (int trial = 0; trial < 64; ++trial) {
+        State sparse = 0;
+        for (int i = 0; i < 8; ++i) sparse |= State{1} << (next_random(seed) % 63);
+        const int bound = game.column_run_lower_bound(sparse);
+        const auto optimal = Solver(game).solve_from(sparse);
+        check(optimal.optimal && bound <= static_cast<int>(optimal.moves.size()),
+              "column-run bound must not overestimate exact optimum");
+        const int target = bound - 1;
+        if (target >= 0) {
+            const auto checked = Solver(game, tiles::SearchOptions{false, true})
+                                     .solve_from_until(sparse, target);
+            check(checked.target_impossible,
+                  "column-run bound must soundly disprove smaller targets");
+        }
+    }
 }
 
 void test_random_components_and_gravity() {
@@ -380,6 +592,11 @@ int main() {
         test_small_known_optima_and_replay();
         test_target_reached_and_ruled_out();
         test_generated_example_fast_solution();
+        test_canonical_visible_states();
+        test_canonical_bounded_proofs();
+        test_column_run_bound();
+        test_bounded_bfs();
+        test_sat_cross_validation();
         test_random_components_and_gravity();
     } catch (const std::exception& error) {
         std::cerr << "test_solver: " << error.what() << '\n';

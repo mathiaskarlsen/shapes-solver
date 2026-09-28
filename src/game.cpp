@@ -1,8 +1,10 @@
 #include "game.h"
 
+#include <algorithm>
 #include <bit>
 #include <fstream>
 #include <stdexcept>
+#include <utility>
 
 namespace tiles {
 namespace {
@@ -34,8 +36,55 @@ Game::Game(const std::array<std::string, kRows>& rows) {
                                             ": expected P, B, G, or O");
             }
             colors_[r * kColumns + c] = ch;
+            const int color_index = ch == 'P' ? 0 : ch == 'B' ? 1 : ch == 'G' ? 2 : 3;
+            color_column_masks_[color_index][c] |= State{1} << (r * kColumns + c);
         }
     }
+    for (int c = 0; c < kColumns; ++c) {
+        std::array<std::pair<std::uint32_t, std::uint16_t>, 1 << kRows> sequences{};
+        for (int mask = 0; mask < (1 << kRows); ++mask) {
+            std::uint32_t sequence = 1; // A leading base-5 digit distinguishes lengths.
+            for (int r = 0; r < kRows; ++r) {
+                if (!(mask & (1 << r))) continue;
+                const char color = colors_[r * kColumns + c];
+                const unsigned digit = color == 'P' ? 1 : color == 'B' ? 2 : color == 'G' ? 3 : 4;
+                sequence = sequence * 5 + digit;
+            }
+            sequences[mask] = {sequence, static_cast<std::uint16_t>(mask)};
+        }
+        std::sort(sequences.begin(), sequences.end());
+        std::uint16_t representative = 0;
+        std::uint32_t previous = 0;
+        for (const auto& [sequence, mask] : sequences) {
+            if (sequence != previous) representative = mask;
+            canonical_columns_[c][mask] = representative;
+            previous = sequence;
+        }
+    }
+}
+
+State Game::canonical_key(State state) const {
+    State key = 0;
+    for (int c = 0; c < kColumns; ++c) {
+        unsigned local = 0;
+        for (int r = 0; r < kRows; ++r) {
+            local |= static_cast<unsigned>((state >> (r * kColumns + c)) & 1) << r;
+        }
+        key |= State{canonical_columns_[c][local]} << (c * kRows);
+    }
+    return key;
+}
+
+int Game::column_run_lower_bound(State state) const {
+    int runs = 0;
+    for (const auto& color : color_column_masks_) {
+        unsigned columns = 0;
+        for (int c = 0; c < kColumns; ++c) {
+            columns |= static_cast<unsigned>((state & color[c]) != 0) << c;
+        }
+        runs += std::popcount(columns & ~(columns << 1));
+    }
+    return runs;
 }
 
 Game Game::from_file(const std::string& path) {

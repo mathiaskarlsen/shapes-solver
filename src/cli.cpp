@@ -9,11 +9,17 @@
 #include <stdexcept>
 #include <string>
 
+#ifdef _WIN32
+#define NOMINMAX
+#include <windows.h>
+#include <psapi.h>
+#endif
+
 namespace {
 
 void usage() {
     std::cerr << "Usage: solver BOARD.txt [--optimal | --fast | --target-moves N] "
-                 "[--show-steps] [--time-limit-ms N]\n"
+                 "[--show-steps] [--time-limit-ms N] [--canonical-tt] [--distinct-color-lb] [--unordered-tt] [--threads N]\n"
                  "Coordinates are 1-based; row 1 is the top of the currently settled board.\n";
 }
 
@@ -36,6 +42,10 @@ int main(int argc, char** argv) {
         bool fast = false;
         bool optimal = false;
         bool show_steps = false;
+        bool canonical_tt = false;
+        bool column_run_bound = true;
+        bool flat_table = true;
+        unsigned threads = 1;
         std::chrono::milliseconds limit{0};
         std::optional<int> target;
         for (int i = 1; i < argc; ++i) {
@@ -43,7 +53,19 @@ int main(int argc, char** argv) {
             if (arg == "--fast") fast = true;
             else if (arg == "--optimal") optimal = true;
             else if (arg == "--show-steps") show_steps = true;
-            else if (arg == "--target-moves") {
+            else if (arg == "--canonical-tt") canonical_tt = true;
+            else if (arg == "--distinct-color-lb") column_run_bound = false;
+            else if (arg == "--unordered-tt") flat_table = false;
+            else if (arg == "--threads") {
+                if (++i == argc) throw std::invalid_argument("--threads needs an integer from 1 to 16");
+                const std::string value = argv[i];
+                std::size_t used = 0;
+                const long long parsed = std::stoll(value, &used);
+                if (used != value.size() || parsed < 1 || parsed > 16) {
+                    throw std::invalid_argument("--threads needs an integer from 1 to 16");
+                }
+                threads = static_cast<unsigned>(parsed);
+            } else if (arg == "--target-moves") {
                 if (++i == argc) throw std::invalid_argument("--target-moves needs an integer from 0 to 63");
                 const std::string value = argv[i];
                 std::size_t used = 0;
@@ -67,14 +89,23 @@ int main(int argc, char** argv) {
             else throw std::invalid_argument("only one board file can be specified");
         }
         if (file.empty() || (fast && optimal) || (target && (fast || optimal)) ||
-            (fast && limit.count() > 0)) {
+            (fast && (limit.count() > 0 || canonical_tt || !column_run_bound || !flat_table || threads != 1))) {
             throw std::invalid_argument("supply one board file; --fast, --optimal, and "
-                                        "--target-moves are exclusive; --fast cannot use a time limit");
+                                        "--target-moves are exclusive; --fast cannot use "
+                                        "a time limit or exact-search options");
         }
+        if (threads != 1 && !target)
+            throw std::invalid_argument("--threads >1 requires --target-moves");
         const tiles::Game game = tiles::Game::from_file(file);
+        tiles::SearchOptions options;
+        options.canonical_keys = canonical_tt;
+        options.column_run_bound = column_run_bound;
+        options.flat_table = flat_table;
+        options.threads = threads;
+        const tiles::Solver solver(game, options);
         const tiles::Solution result = target
-            ? tiles::Solver(game).solve_until(*target, limit)
-            : tiles::Solver(game).solve(!fast, limit);
+            ? solver.solve_until(*target, limit)
+            : solver.solve(!fast, limit);
         std::cout << "Board: 7x9\nInitial tiles: "
                   << std::popcount(game.initial_state()) << "\n\n";
         std::cout << "Fast solution found: " << result.fast_length << " moves\n";
@@ -123,10 +154,26 @@ int main(int argc, char** argv) {
         }
         if (!game.is_empty(state)) throw std::logic_error("solver failed to clear the board");
         std::cout << "\nStates explored: " << result.states_expanded
+                  << "\nStates/second (exact): " << std::fixed << std::setprecision(0)
+                  << (result.exact_seconds > 0 ? result.states_expanded / result.exact_seconds : 0)
+                  << "\nMoves generated (exact): " << result.moves_generated
+                  << "\nCanonical duplicate children: " << result.canonical_duplicate_children
+                  << "\nTransposition lookups: " << result.transposition_lookups
                   << "\nTransposition hits: " << result.transposition_hits
+                  << "\nTransposition inserts: " << result.transposition_inserts
+                  << "\nTransposition entries: " << result.transposition_entries
+                  << "\nLower-bound prunes: " << result.lower_bound_prunes
                   << "\nMaximum search depth: " << result.max_search_depth
-                  << "\nElapsed: " << std::fixed << std::setprecision(3)
-                  << result.elapsed_seconds << " s\n";
+                  << "\nThreads: " << result.thread_count
+                  << "\nExact elapsed: " << std::fixed << std::setprecision(3)
+                  << result.exact_seconds << " s"
+                  << "\nElapsed: " << result.elapsed_seconds << " s\n";
+#ifdef _WIN32
+        PROCESS_MEMORY_COUNTERS memory{};
+        if (GetProcessMemoryInfo(GetCurrentProcess(), &memory, sizeof(memory))) {
+            std::cout << "Peak working set: " << memory.PeakWorkingSetSize / 1048576 << " MiB\n";
+        }
+#endif
     } catch (const std::exception& error) {
         std::cerr << "Error: " << error.what() << '\n';
         usage();

@@ -45,9 +45,15 @@ public:
     State apply_move(State state, const Move& move) const { return state & ~move.mask; }
     bool is_empty(State state) const { return state == 0; }
     RenderedBoard render(State state) const;
+    // Collision-free identity of the settled visible board, independent of original tile IDs.
+    State canonical_key(State state) const;
+    // One necessary removal per permanently separated run of a color's columns.
+    int column_run_lower_bound(State state) const;
 
 private:
     std::array<char, kColumns * kRows> colors_{};
+    std::array<std::array<std::uint16_t, 1 << kRows>, kColumns> canonical_columns_{};
+    std::array<std::array<State, kColumns>, 4> color_column_masks_{};
     template<bool NeedIds>
     void settle(State state, RenderedBoard& board,
                 std::array<std::array<int, kColumns>, kRows>* ids) const;
