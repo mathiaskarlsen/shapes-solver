@@ -12,6 +12,16 @@ ctest --test-dir build -C Release --output-on-failure
 
 On Visual Studio multi-configuration generators the executables are in `build/Release/`; single-configuration generators put them in `build/`. A C++23-capable compiler is required.
 
+## Local web guide
+
+Build as above, then start the local frontend with Python 3:
+
+```sh
+python web/server.py
+```
+
+Open `http://127.0.0.1:8000/`. Select a color and click cells to paint the 7×9 board; the eraser removes individual tiles. Click **Fast solve**, then click any highlighted tile to remove that group and watch the remaining tiles fall before the next move appears. **Edit board** restores the puzzle for changes. The guide uses the fast greedy/beam solver, not optimal search, and accepts empty cells. The server binds to localhost; use `--port N` to change the port or `--solver-binary PATH` for a nonstandard build location.
+
 ## Input and CLI
 
 A board file has exactly 9 lines of exactly 7 symbols; line 1 is the top. `P` = pink, `B` = blue, `G` = green, `O` = orange. No spaces or empty cells in the input. See `examples/initial-board.txt` for a generated example.

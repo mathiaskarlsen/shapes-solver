@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#351054">
+  <title>Tile by tile · Fast solution guide</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <header class="toolbar">
+    <h1 class="sr-only">Tile solver</h1>
+    <div class="toolbar-inner">
+      <div class="status-bar">
+        <div class="metric"><span class="control-label">TILES</span><strong id="filled-count">0 / 63</strong></div>
+        <div class="metric"><span class="control-label">STEP</span><strong id="progress" aria-live="polite">—</strong></div>
+        <button type="button" class="reset-button" id="reset-button" aria-label="Reset board"><span class="control-label">RESET</span><span class="reset-icon" aria-hidden="true">↺</span></button>
+      </div>
+      <div class="action-bar">
+        <div class="paint-controls">
+          <span class="control-label">COLOR</span>
+          <div class="palette" role="group" aria-label="Paint color">
+            <button type="button" class="swatch paint-P" data-color="P" aria-label="Pink (P)" aria-pressed="true">P</button>
+            <button type="button" class="swatch paint-B" data-color="B" aria-label="Blue (B)" aria-pressed="false">B</button>
+            <button type="button" class="swatch paint-G" data-color="G" aria-label="Green (G)" aria-pressed="false">G</button>
+            <button type="button" class="swatch paint-O" data-color="O" aria-label="Orange (O)" aria-pressed="false">O</button>
+            <button type="button" class="swatch eraser" data-color="." aria-label="Eraser" aria-pressed="false">×</button>
+          </div>
+        </div>
+        <button type="button" class="solve-button" id="solve-button" disabled>Fast solve</button>
+        <button type="button" class="secondary-button" id="edit-button" hidden>Edit board</button>
+        <button type="button" class="secondary-button" id="clear-button">Clear</button>
+      </div>
+      <p class="error-message" id="error-message" role="alert" hidden></p>
+    </div>
+  </header>
+  <main class="stage">
+    <div class="board-frame">
+      <div class="board-grid" id="board" role="group" aria-label="Nine row, seven column tile board"></div>
+      <div class="tile-overlay" id="tile-overlay" aria-hidden="true"></div>
+    </div>
+  </main>
+</body>
+</html>
