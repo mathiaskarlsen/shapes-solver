@@ -31,12 +31,6 @@ struct RankedMove {
     int score;
 };
 
-int largest_group(const MoveList& moves) {
-    int largest = 0;
-    for (const Move& move : moves) largest = std::max(largest, move.size);
-    return largest;
-}
-
 std::vector<Move> greedy(const Game& game, State initial, int variant) {
     std::vector<Move> path;
     path.reserve(kColumns * kRows);
@@ -46,14 +40,14 @@ std::vector<Move> greedy(const Game& game, State initial, int variant) {
         int best_score = -100000;
         Move best;
         for (const Move& move : moves) {
-            const MoveList next = game.generate_moves(game.apply_move(state, move));
-            const int merges = moves.count - next.count - 1;
+            const BoardMetrics next = game.measure(game.apply_move(state, move));
+            const int merges = moves.count - next.components - 1;
             int score = 0;
             switch (variant) {
             case 0: score = move.size * 100 + merges * 15; break;
             case 1: score = move.size * 15 + merges * 100; break;
-            case 2: score = move.size * 30 + merges * 40 + largest_group(next) * 5; break;
-            default: score = move.size * 70 + merges * 35 + largest_group(next) * 3; break;
+            case 2: score = move.size * 30 + merges * 40 + next.largest * 5; break;
+            default: score = move.size * 70 + merges * 35 + next.largest * 3; break;
             }
             if (score > best_score) {
                 best_score = score;
@@ -86,10 +80,12 @@ std::vector<Move> beam(const Game& game, State initial, int upper_bound,
     constexpr int width = 10000;
     std::vector<BeamNode> nodes{{initial, -1, {}}};
     std::vector<int> frontier{0};
+    std::vector<BeamCandidate> candidates;
+    std::unordered_set<State> seen;
     for (int depth = 1; depth < upper_bound && !frontier.empty(); ++depth) {
         if (limited && std::chrono::steady_clock::now() >= deadline) break;
-        std::vector<BeamCandidate> candidates;
-        std::unordered_set<State> seen;
+        candidates.clear();
+        seen.clear();
         candidates.reserve(frontier.size() * 16);
         seen.reserve(frontier.size() * 32);
         int checked = 0;
@@ -108,11 +104,10 @@ std::vector<Move> beam(const Game& game, State initial, int upper_bound,
                     return path;
                 }
                 if (!seen.insert(child).second) continue;
-                const MoveList groups = game.generate_moves(child);
-                if (depth + color_lower_bound(groups) >= upper_bound) continue;
+                const BoardMetrics groups = game.measure(child);
+                if (depth + groups.distinct_colors >= upper_bound) continue;
                 const int tiles = std::popcount(child);
-                const int largest = largest_group(groups);
-                const int score = 110 * groups.count + 2 * tiles - 5 * largest;
+                const int score = 110 * groups.components + 2 * tiles - 5 * groups.largest;
                 candidates.push_back({child, index, move, score});
             }
         }
@@ -170,9 +165,9 @@ struct Search {
         std::array<RankedMove, kColumns * kRows> ordered{};
         for (int i = 0; i < moves.count; ++i) {
             const Move move = moves.moves[i];
-            const MoveList next = game.generate_moves(game.apply_move(state, move));
+            const BoardMetrics next = game.measure(game.apply_move(state, move));
             ordered[i] = {move, move.size * 16 +
-                        (moves.count - next.count - 1) * 24 + largest_group(next) * 2};
+                        (moves.count - next.components - 1) * 24 + next.largest * 2};
         }
         std::sort(ordered.begin(), ordered.begin() + moves.count,
                   [](const RankedMove& a, const RankedMove& b) {

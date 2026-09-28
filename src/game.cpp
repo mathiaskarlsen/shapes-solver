@@ -1,9 +1,25 @@
 #include "game.h"
 
+#include <bit>
 #include <fstream>
 #include <stdexcept>
 
 namespace tiles {
+namespace {
+constexpr auto kNeighbors = [] {
+    std::array<std::array<int, 4>, kColumns * kRows> neighbors{};
+    for (int r = 0; r < kRows; ++r) {
+        for (int c = 0; c < kColumns; ++c) {
+            const int index = r * kColumns + c;
+            neighbors[index] = {r ? index - kColumns : -1,
+                                r + 1 < kRows ? index + kColumns : -1,
+                                c ? index - 1 : -1,
+                                c + 1 < kColumns ? index + 1 : -1};
+        }
+    }
+    return neighbors;
+}();
+} // namespace
 
 Game::Game(const std::array<std::string, kRows>& rows) {
     for (int r = 0; r < kRows; ++r) {
@@ -40,19 +56,17 @@ Game Game::from_file(const std::string& path) {
     return Game(rows);
 }
 
+template<bool NeedIds>
 void Game::settle(State state, RenderedBoard& board,
-                  std::array<std::array<int, kColumns>, kRows>& ids) const {
-    for (int r = 0; r < kRows; ++r) {
-        board[r].fill('.');
-        ids[r].fill(-1);
-    }
+                  std::array<std::array<int, kColumns>, kRows>* ids) const {
+    for (auto& row : board) row.fill('.');
     for (int c = 0; c < kColumns; ++c) {
         int bottom = kRows - 1;
         for (int r = kRows - 1; r >= 0; --r) {
             const int id = r * kColumns + c;
             if (state & (State{1} << id)) {
                 board[bottom][c] = colors_[id];
-                ids[bottom][c] = id;
+                if constexpr (NeedIds) (*ids)[bottom][c] = id;
                 --bottom;
             }
         }
@@ -61,24 +75,34 @@ void Game::settle(State state, RenderedBoard& board,
 
 RenderedBoard Game::render(State state) const {
     RenderedBoard board;
-    std::array<std::array<int, kColumns>, kRows> ids;
-    settle(state, board, ids);
+    settle<false>(state, board, nullptr);
     return board;
 }
 
-MoveList Game::generate_moves(State state) const {
+template<bool CollectMoves>
+BoardMetrics Game::scan(State state, MoveList* moves) const {
     RenderedBoard board;
     std::array<std::array<int, kColumns>, kRows> ids;
-    settle(state, board, ids);
+    settle<CollectMoves>(state, board, &ids);
 
-    MoveList result;
+    BoardMetrics metrics;
+    unsigned colors = 0;
     std::array<bool, kColumns * kRows> visited{};
     std::array<int, kColumns * kRows> queue{};
     for (int r = 0; r < kRows; ++r) {
         for (int c = 0; c < kColumns; ++c) {
             const int start = r * kColumns + c;
-            if (visited[start] || ids[r][c] < 0) continue;
-            Move component{0, r, c, 0, board[r][c]};
+            const char color = board[r][c];
+            if (visited[start] || color == '.') continue;
+            switch (color) {
+            case 'P': colors |= 1; break;
+            case 'B': colors |= 2; break;
+            case 'G': colors |= 4; break;
+            default: colors |= 8; break;
+            }
+            Move component;
+            if constexpr (CollectMoves) component = {0, r, c, 0, color};
+            int size = 0;
             int front = 0;
             int back = 0;
             queue[back++] = start;
@@ -87,27 +111,36 @@ MoveList Game::generate_moves(State state) const {
                 const int index = queue[front++];
                 const int row = index / kColumns;
                 const int column = index % kColumns;
-                component.mask |= State{1} << ids[row][column];
-                ++component.size;
-                const int neighbors[4][2] = {
-                    {row - 1, column}, {row + 1, column},
-                    {row, column - 1}, {row, column + 1}
-                };
-                for (const auto& neighbor : neighbors) {
-                    const int nr = neighbor[0], nc = neighbor[1];
-                    if (nr < 0 || nr >= kRows || nc < 0 || nc >= kColumns ||
-                        board[nr][nc] != component.color) continue;
-                    const int next = nr * kColumns + nc;
-                    if (!visited[next]) {
+                if constexpr (CollectMoves) component.mask |= State{1} << ids[row][column];
+                ++size;
+                for (int next : kNeighbors[index]) {
+                    if (next < 0 || visited[next]) continue;
+                    if (board[next / kColumns][next % kColumns] == color) {
                         visited[next] = true;
                         queue[back++] = next;
                     }
                 }
             }
-            result.moves[result.count++] = component;
+            ++metrics.components;
+            if (size > metrics.largest) metrics.largest = size;
+            if constexpr (CollectMoves) {
+                component.size = size;
+                moves->moves[moves->count++] = component;
+            }
         }
     }
-    return result;
+    metrics.distinct_colors = std::popcount(colors);
+    return metrics;
+}
+
+MoveList Game::generate_moves(State state) const {
+    MoveList moves;
+    scan<true>(state, &moves);
+    return moves;
+}
+
+BoardMetrics Game::measure(State state) const {
+    return scan<false>(state, nullptr);
 }
 
 } // namespace tiles

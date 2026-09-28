@@ -303,6 +303,22 @@ void test_random_components_and_gravity() {
                 expected.push_back(component);
             }
         }
+        int largest = 0;
+        for (State component : expected) largest = std::max(largest, std::popcount(component));
+        bool present[4]{};
+        for (const auto& row : rendered) {
+            for (char color : row) {
+                if (color == 'P') present[0] = true;
+                if (color == 'B') present[1] = true;
+                if (color == 'G') present[2] = true;
+                if (color == 'O') present[3] = true;
+            }
+        }
+        const int colors = std::count(present, present + 4, true);
+        const auto metrics = game.measure(state);
+        check(metrics.components == static_cast<int>(expected.size()) &&
+                  metrics.largest == largest && metrics.distinct_colors == colors,
+              "random board metrics must describe the settled components");
         const MoveList moves = game.generate_moves(state);
         std::vector<State> actual;
         for (const Move& move : moves) {
