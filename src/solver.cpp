@@ -4,6 +4,7 @@
 #include <array>
 #include <bit>
 #include <chrono>
+#include <stdexcept>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -188,36 +189,49 @@ struct Search {
     }
 };
 
-} // namespace
-
-Solution Solver::solve(bool prove_optimal, std::chrono::milliseconds time_limit) const {
-    return solve_from(game_.initial_state(), prove_optimal, time_limit);
-}
-
-Solution Solver::solve_from(State initial, bool prove_optimal,
-                            std::chrono::milliseconds time_limit) const {
+Solution solve_impl(const Game& game, State initial, bool prove_optimal, int target,
+                    std::chrono::milliseconds time_limit) {
+    const bool target_mode = target >= 0;
     const auto start = std::chrono::steady_clock::now();
+    const auto deadline = start + time_limit;
+    const bool limited = time_limit.count() > 0;
     Solution result;
     for (int variant = 0; variant < 4; ++variant) {
-        auto candidate = greedy(game_, initial, variant);
+        auto candidate = greedy(game, initial, variant);
         if (variant == 0 || candidate.size() < result.moves.size()) {
             result.moves = std::move(candidate);
         }
+        if (target_mode && static_cast<int>(result.moves.size()) <= target) break;
     }
-    const int initial_lower_bound = color_lower_bound(game_.generate_moves(initial));
+    const int initial_lower_bound = color_lower_bound(game.generate_moves(initial));
     result.optimal = static_cast<int>(result.moves.size()) == initial_lower_bound;
-    const auto deadline = start + time_limit;
-    if (!result.optimal) {
-        auto candidate = beam(game_, initial, static_cast<int>(result.moves.size()),
-                              deadline, time_limit.count() > 0);
+    if (target_mode && target < initial_lower_bound) result.target_impossible = true;
+    if (!result.optimal && !result.target_impossible &&
+        (!target_mode || static_cast<int>(result.moves.size()) > target)) {
+        auto candidate = beam(game, initial, static_cast<int>(result.moves.size()),
+                              deadline, limited);
         if (!candidate.empty() && candidate.size() < result.moves.size()) {
             result.moves = std::move(candidate);
         }
         result.optimal = static_cast<int>(result.moves.size()) == initial_lower_bound;
     }
     result.fast_length = static_cast<int>(result.moves.size());
-    if (prove_optimal && !result.optimal) {
-        Search search{game_, result, deadline, time_limit.count() > 0};
+    if (target_mode && !result.target_impossible &&
+        static_cast<int>(result.moves.size()) > target) {
+        // Search the requested bound directly, rather than proving every
+        // intermediate bound below the heuristic incumbent.
+        Search search{game, result, deadline, limited};
+        search.failed.reserve(65536);
+        const Search::Result outcome = search.dfs(initial, target, 0);
+        if (outcome == Search::Result::found) {
+            result.moves.assign(search.path.begin(), search.path.begin() + search.found_depth);
+            result.optimal = static_cast<int>(result.moves.size()) == initial_lower_bound;
+        } else if (outcome == Search::Result::failed) {
+            result.target_impossible = true;
+            result.optimal = static_cast<int>(result.moves.size()) == target + 1;
+        }
+    } else if (!target_mode && prove_optimal && !result.optimal) {
+        Search search{game, result, deadline, limited};
         search.failed.reserve(65536);
         for (;;) {
             const int bound = static_cast<int>(result.moves.size()) - 1;
@@ -236,6 +250,29 @@ Solution Solver::solve_from(State initial, bool prove_optimal,
     }
     result.elapsed_seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
     return result;
+}
+
+} // namespace
+
+Solution Solver::solve(bool prove_optimal, std::chrono::milliseconds time_limit) const {
+    return solve_from(game_.initial_state(), prove_optimal, time_limit);
+}
+
+Solution Solver::solve_from(State initial, bool prove_optimal,
+                            std::chrono::milliseconds time_limit) const {
+    return solve_impl(game_, initial, prove_optimal, -1, time_limit);
+}
+
+Solution Solver::solve_until(int target_moves, std::chrono::milliseconds time_limit) const {
+    return solve_from_until(game_.initial_state(), target_moves, time_limit);
+}
+
+Solution Solver::solve_from_until(State initial, int target_moves,
+                                  std::chrono::milliseconds time_limit) const {
+    if (target_moves < 0 || target_moves > kRows * kColumns) {
+        throw std::invalid_argument("target moves must be between 0 and 63");
+    }
+    return solve_impl(game_, initial, false, target_moves, time_limit);
 }
 
 } // namespace tiles

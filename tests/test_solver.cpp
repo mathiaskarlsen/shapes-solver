@@ -220,6 +220,28 @@ void test_small_known_optima_and_replay() {
     }
 }
 
+void test_target_reached_and_ruled_out() {
+    const Game game(board({{8, 0, 'G'}, {8, 2, 'G'}}));
+    const State state = mask({{8, 0}, {8, 2}});
+
+    const auto reached = Solver(game).solve_from_until(state, 2);
+    check(!reached.target_impossible && reached.moves.size() == 2,
+          "target search must stop at a reachable length");
+    replay(game, state, reached);
+
+    const auto ruled_out = Solver(game).solve_from_until(state, 1);
+    check(ruled_out.target_impossible && ruled_out.optimal && ruled_out.moves.size() == 2,
+          "exhausting a bound one below the incumbent proves its optimality");
+    replay(game, state, ruled_out);
+
+    const auto weaker_bound = Solver(game).solve_from_until(state, 0);
+    check(weaker_bound.target_impossible && !weaker_bound.optimal,
+          "ruling out zero clicks must not imply a two-click solution is optimal");
+    const auto empty = Solver(game).solve_from_until(0, 0);
+    check(!empty.target_impossible && empty.optimal && empty.moves.empty(),
+          "empty state must meet a zero-click target");
+}
+
 void test_generated_example_fast_solution() {
     const Game game(Rows{
         "BPOOGOO", "GOOBGBB", "BOPPPGP",
@@ -230,6 +252,10 @@ void test_generated_example_fast_solution() {
     check(solution.moves.size() <= 12,
           "generated example must have a complete solution in at most 12 clicks");
     replay(game, game.initial_state(), solution);
+    const auto targeted = Solver(game).solve_until(12);
+    check(!targeted.target_impossible && targeted.moves.size() <= 12,
+          "target mode must find a complete solution within the requested length");
+    replay(game, game.initial_state(), targeted);
 }
 
 std::uint64_t next_random(std::uint64_t& seed) {
@@ -352,6 +378,7 @@ int main() {
         test_one_move_per_component();
         test_empty_state();
         test_small_known_optima_and_replay();
+        test_target_reached_and_ruled_out();
         test_generated_example_fast_solution();
         test_random_components_and_gravity();
     } catch (const std::exception& error) {

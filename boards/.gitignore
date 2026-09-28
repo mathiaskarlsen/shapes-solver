@@ -1,0 +1,3 @@
+# Keep this directory in Git; ignore personal puzzle files beneath it.
+*
+!.gitignore
